@@ -1,4 +1,4 @@
-from tensorflow.keras.layers import Input, RepeatVector,Bidirectional,LSTM,TimeDistributed,Dense,Flatten, LeakyReLU,Conv1D, PReLU, Dropout, Concatenate, GRU
+from tensorflow.keras.layers import Input, RepeatVector,Bidirectional,LSTM,TimeDistributed,Dense,Flatten, LeakyReLU,Conv1D, PReLU, Dropout, Concatenate, GRU, BatchNormalization
 from tensorflow.keras.models import Model
 import tensorflow as tf
 import numpy as np
@@ -19,7 +19,7 @@ def positional_encoding(position, d_model):
     return tf.convert_to_tensor(pos_encoding, dtype=tf.float32)
 
 
-def QRNN_model_v4(n_cell=256, n_layers=2, FN=[128,64], dr_rates=0.2, PE=None, PE_d = 16):
+def QRNN_model(RN=[256,256], FN=[128,64], Q_bin=[0.1,0.3,0.5,0.7,0.9], dr_rates=0.2, PE=None, PE_d = 16, BN=False):
     inputs = Input(shape =(16) ,name='input')
     num_rows = tf.shape(inputs,name='num_rows')[0]
     inputs_extend = RepeatVector(360,name='extend_inputs')(inputs)
@@ -31,24 +31,40 @@ def QRNN_model_v4(n_cell=256, n_layers=2, FN=[128,64], dr_rates=0.2, PE=None, PE
         pos_enc_tile = tf.tile(positional_encoding(360,PE_d), [num_rows, 1,1],name='pos_enc_tile')
         inputs_extend = Concatenate()([inputs_extend,pos_enc_tile])
 
-    for i in range(n_layers):
-        if i == 0:
-            lstm = Bidirectional(LSTM(n_cell, return_sequences=True,dropout=dr_rates))(inputs_extend)       
-        else:
-            lstm = Bidirectional(LSTM(n_cell, return_sequences=True,dropout=dr_rates))(lstm)
+    if len(RN) !=0:
+        for i, n_cell in enumerate(RN):
+            if i == 0:
+                lstm = Bidirectional(LSTM(n_cell, return_sequences=True,dropout=dr_rates))(inputs_extend)       
+                # lstm = LSTM(n_cell, return_sequences=True,dropout=dr_rates)(inputs_extend)       
 
-    if len(FN)!=0:
-        for i,j in enumerate(FN):
-            if i ==0:
-                FN_layer = TimeDistributed(Dense(j,activation=LeakyReLU()))(lstm)
             else:
-                FN_layer = TimeDistributed(Dense(j,activation=LeakyReLU()))(FN_layer) 
-        FN_drop = Dropout(dr_rates)(FN_layer)
-        FN_out = TimeDistributed(Dense(10))(FN_drop)
-    else :
-        FN_out = TimeDistributed(Dense(10))(lstm)
+                lstm = Bidirectional(LSTM(n_cell, return_sequences=True,dropout=dr_rates))(lstm)    
+                # lstm = LSTM(n_cell, return_sequences=True,dropout=dr_rates)(inputs_extend)       
 
-    outputs = FN_out
+        if len(FN)!=0:
+            for i,j in enumerate(FN):
+                if i ==0:
+                    FN_layer = TimeDistributed(Dense(j,activation=LeakyReLU()))(lstm)
+                else:
+                    FN_layer = TimeDistributed(Dense(j,activation=LeakyReLU()))(FN_layer) 
+            FN_drop = Dropout(dr_rates)(FN_layer)
+            
+            FN_out = [TimeDistributed(Dense(1),name='out_{}'.format(x))(FN_drop) for x in range(len(Q_bin))]
+        else :
+            FN_out = [TimeDistributed(Dense(1),name='out_{}'.format(x))(lstm) for x in range(len(Q_bin))]
+        outputs = [Flatten(name='flat_out_{}'.format(i))(x) for i,x in enumerate(FN_out)] # update
+
+    else :
+        for i, n_neuron in enumerate(FN):
+            if i==0:
+                FN_layer = Dense(n_neuron,activation=LeakyReLU())(inputs)
+            else:
+                FN_layer = Dense(n_neuron, activation=LeakyReLU())(FN_layer)
+            if BN == True:
+                FN_layer = BatchNormalization()(FN_layer) 
+        FN_drop = Dropout(dr_rates)(FN_layer)
+        outputs = [Dense(360,name='out_{}'.format(x))(FN_drop) for x in range(len(Q_bin))]
+
     model= Model(inputs, outputs)
     return model
     
